@@ -56,8 +56,7 @@ def run_multiple_test_samples(model, params, test_data, num_samples=20):
         for (true_cls, pred_cls), count in error_stats.items():
             print(f"- {true_cls} → {pred_cls}: {count} time(s)")
 
-
-def evaluate_loss_and_acc(model, params, data):
+def evaluate_loss_and_acc(model, params, data, weight_decay=1e-4):
     total_loss = 0
     total_acc = 0
     total_count = 0
@@ -65,8 +64,10 @@ def evaluate_loss_and_acc(model, params, data):
         logits = model.apply(params, imgs)
         preds = jnp.argmax(logits, axis=-1)
         acc = jnp.sum(preds == labels)
-        # 修正這一行
-        loss = jnp.mean(optax.softmax_cross_entropy(logits, jax.nn.one_hot(labels, num_classes=10)))
+        ce_loss = jnp.mean(optax.softmax_cross_entropy(logits, jax.nn.one_hot(labels, num_classes=10)))
+        # L2正則化
+        l2_loss = sum([jnp.sum(jnp.square(p)) for p in jax.tree_util.tree_leaves(params)])
+        loss = ce_loss + weight_decay * l2_loss
         total_loss += float(loss) * imgs.shape[0]
         total_acc += float(acc)
         total_count += imgs.shape[0]
@@ -94,7 +95,6 @@ def plot_all_metrics(train_accs, train_losses, test_accs, test_losses, lrs):
     l5, = ax3.plot(np.linspace(1, len(train_accs), len(lrs)), lrs, label='Learning Rate', color='tab:green', alpha=0.3)
     ax3.tick_params(axis='y', labelcolor='tab:green')
 
-    # 合併 legend
     lines = [l1, l2, l3, l4, l5]
     labels = [line.get_label() for line in lines]
     ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=3)
@@ -106,17 +106,19 @@ def plot_all_metrics(train_accs, train_losses, test_accs, test_losses, lrs):
 def main():
     rng = jax.random.PRNGKey(0)
 
+    # 可適度降低模型複雜度
     model = MlpMixer(
         num_classes=10,
-        num_blocks=4,
+        num_blocks=3,        # 由4降為3
         patch_size=4,
-        hidden_dim=64,
-        tokens_mlp_dim=128,
-        channels_mlp_dim=256,
+        hidden_dim=48,       # 由64降為48
+        tokens_mlp_dim=96,   # 由128降為96
+        channels_mlp_dim=192 # 由256降為192
     )
 
     batch_size = 128
     num_epochs = 50
+    weight_decay = 2e-4     # L2正則化強度，可再調整
 
     train_data = load_dataset(batch_size=batch_size, train=True)
     test_data = load_dataset(batch_size=batch_size, train=False)
@@ -130,7 +132,8 @@ def main():
         learning_rate=0.001,
         num_epochs=num_epochs,
         steps_per_epoch=steps_per_epoch,
-        warmup_steps=warmup_steps
+        warmup_steps=warmup_steps,
+        weight_decay=weight_decay
     )
     train_accs, train_losses, test_accs, test_losses, lrs = [], [], [], [], []
 
@@ -139,7 +142,7 @@ def main():
         epoch_train_acc = 0
         batch_count = 0
         for batch_idx, batch in enumerate(train_data):
-            state, metrics = train_step(state, batch)
+            state, metrics = train_step(state, batch, weight_decay=weight_decay)
             current_step = epoch * steps_per_epoch + batch_idx
             if hasattr(state.tx, 'schedule'):
                 lr = state.tx.schedule(current_step)
@@ -151,16 +154,13 @@ def main():
             batch_count += 1
             if epoch == 0 and batch_idx < 10:
                 print(f"Step {current_step}, LR: {float(lr):.6f}")
-        # 訓練集本 epoch 的平均 accuracy/loss
         train_accs.append(epoch_train_acc / batch_count)
         train_losses.append(epoch_train_loss / batch_count)
-        # 每個 epoch 結束後評估測試集
-        test_loss, test_acc = evaluate_loss_and_acc(model, state.params, test_data)
+        test_loss, test_acc = evaluate_loss_and_acc(model, state.params, test_data, weight_decay=weight_decay)
         test_accs.append(test_acc)
         test_losses.append(test_loss)
         print(f"Epoch {epoch+1} — Train Loss: {train_losses[-1]:.4f}, Train Acc: {train_accs[-1]:.4f}, Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}, LR: {float(lr):.6f}")
 
-        # 過度擬合提示
         if train_accs[-1] - test_accs[-1] > 0.15 and test_accs[-1] < 0.85:
             print("⚠️ 可能過度擬合：訓練集準確率遠高於測試集，請考慮減少模型複雜度或加強正則化/資料增強。")
 

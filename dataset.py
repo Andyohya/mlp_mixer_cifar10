@@ -3,6 +3,8 @@ import jax.numpy as jnp
 
 def preprocess(image, label):
     image = tf.image.resize(image, [32, 32])
+    image = tf.image.random_flip_left_right(image)  # 隨機水平翻轉
+    image = tf.image.random_brightness(image, 0.1)  # 隨機亮度
     image = tf.cast(image, tf.float32) / 255.0
     return image, tf.squeeze(label)
 
