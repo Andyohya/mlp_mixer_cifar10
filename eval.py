@@ -1,9 +1,10 @@
 import jax.numpy as jnp
 
-def evaluate(model, params, test_data):
+def evaluate(model, params, batch_stats, test_data):
     accs = []
     for imgs, labels in test_data:
-        logits = model.apply(params, imgs, train=False)  # ✅ 正確結構
+        variables = {'params': params, 'batch_stats': batch_stats}
+        logits = model.apply(variables, imgs, train=False, mutable=False)
         preds = jnp.argmax(logits, axis=-1)
         acc = jnp.mean(preds == labels)
         accs.append(acc)

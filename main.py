@@ -5,15 +5,12 @@ import numpy as np
 import optax
 import time
 
-# 模組載入
 from model import MlpMixer
 from dataset import load_dataset
-from train import create_train_state, train_step
-from eval import evaluate
 from train import create_train_state, train_step, eval_step, EarlyStopping, split_dataset
+from eval import evaluate
 from utils import plot_metrics
 
-# CIFAR-10 類別名稱
 classes = ['airplane', 'automobile', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck']
 
@@ -21,43 +18,20 @@ def format_duration(seconds):
     mins, secs = divmod(int(seconds), 60)
     return f"{mins} 分 {secs} 秒"
 
-def preprocess(image):
-    return jnp.array(image, dtype=jnp.float32) / 255.0
-
-def visualize_prediction(image, pred_class, true_class):
-    plt.imshow(image.astype(np.float32))
-    plt.title(f"Prediction: {classes[pred_class]}\nGround Truth: {classes[true_class]}")
-    plt.axis('off')
-    plt.show()
-
-def evaluate_loss_and_acc(model, params, data):
-    total_loss = 0
-    total_acc = 0
-    total_count = 0
-    for imgs, labels in data:
-        logits = model.apply(params, imgs, train=False)
-        preds = jnp.argmax(logits, axis=-1)
-        acc = jnp.sum(preds == labels)
-        loss = jnp.mean(optax.softmax_cross_entropy(logits, jax.nn.one_hot(labels, num_classes=10)))
-        total_loss += float(loss) * imgs.shape[0]
-        total_acc += float(acc)
-        total_count += imgs.shape[0]
-    return total_loss / total_count, total_acc / total_count
-
-def plot_all_metrics(train_accs, train_losses, test_accs, test_losses, lrs):
+def plot_all_metrics(train_accs, train_losses, val_accs, val_losses, lrs):
     epochs = range(1, len(train_accs) + 1)
     fig, ax1 = plt.subplots(figsize=(10,6))
 
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Accuracy', color='tab:blue')
     l1, = ax1.plot(epochs, train_accs, label='Train Accuracy', color='tab:blue', linestyle='-')
-    l2, = ax1.plot(epochs, test_accs, label='Test Accuracy', color='tab:blue', linestyle='--')
+    l2, = ax1.plot(epochs, val_accs, label='Val Accuracy', color='tab:blue', linestyle='--')
     ax1.tick_params(axis='y', labelcolor='tab:blue')
 
     ax2 = ax1.twinx()
     ax2.set_ylabel('Loss', color='tab:red')
     l3, = ax2.plot(epochs, train_losses, label='Train Loss', color='tab:red', linestyle='-')
-    l4, = ax2.plot(epochs, test_losses, label='Test Loss', color='tab:red', linestyle='--')
+    l4, = ax2.plot(epochs, val_losses, label='Val Loss', color='tab:red', linestyle='--')
     ax2.tick_params(axis='y', labelcolor='tab:red')
 
     ax3 = ax1.twinx()
@@ -70,7 +44,7 @@ def plot_all_metrics(train_accs, train_losses, test_accs, test_losses, lrs):
     labels = [line.get_label() for line in lines]
     ax1.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=3)
 
-    plt.title('Training/Test Accuracy, Loss and Learning Rate')
+    plt.title('Training/Val Accuracy, Loss and Learning Rate')
     fig.tight_layout()
     plt.show()
 
@@ -120,7 +94,7 @@ def main():
         epoch_start = time.time()
 
         for batch_idx, batch in enumerate(train_data):
-            state, metrics = train_step(state, batch)
+            state, metrics = train_step(state, batch, weight_decay=weight_decay)
             current_step = epoch * steps_per_epoch + batch_idx
             lr = float(schedule(current_step)) if schedule else 0.001
             lrs.append(lr)
@@ -138,7 +112,7 @@ def main():
         # ➕ 驗證集評估
         val_loss, val_acc = 0, 0
         for batch in val_data:
-            metrics = eval_step(state.params, batch, state.apply_fn)
+            metrics = eval_step(state.params, batch, state.apply_fn, state.batch_stats)
             val_loss += float(metrics['loss'])
             val_acc += float(metrics['accuracy'])
         val_loss /= len(val_data)
@@ -153,7 +127,7 @@ def main():
             print(f"⛔ Early stopping triggered at epoch {epoch+1}")
             break
 
-    test_acc = evaluate(model, state.params, test_data)
+    test_acc = evaluate(model, state.params, state.batch_stats, test_data)
     print(f"\n✅ Final Test Accuracy: {test_acc:.4f}")
     print(f"總耗時: {format_duration(time.time() - start_time)}")
 

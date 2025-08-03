@@ -8,6 +8,7 @@ class MlpBlock(nn.Module):
     @nn.compact
     def __call__(self, x, train: bool):
         y = nn.Dense(self.mlp_dim)(x)
+        y = nn.BatchNorm(use_running_average=not train)(y)
         y = nn.gelu(y)
         y = nn.Dropout(rate=self.dropout_rate)(y, deterministic=not train)
         return nn.Dense(x.shape[-1])(y)
